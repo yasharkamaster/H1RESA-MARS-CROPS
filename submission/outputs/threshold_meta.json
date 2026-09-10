@@ -1,0 +1,18 @@
+{
+  "median": 0.4023415864462856,
+  "mad": 0.023687803804995848,
+  "mu": 0.4133419649633402,
+  "sigma": 0.04259128156112443,
+  "elbow_idx": 517,
+  "elbow_threshold": 0.5029799650545979,
+  "robust_threshold": 0.5252582852120165,
+  "gauss_2p5": 0.5198201688661512,
+  "final_threshold": 0.5252582852120165,
+  "threshold_rule": "robust",
+  "n_flagged": 242,
+  "k_modified_z": 3.5,
+  "isolation_forest_contamination": "auto",
+  "n_flagged_fused": 298,
+  "fused_threshold_gauss_2p5": 0.5206421384553619,
+  "flag_overlap_image_vs_fused": 221
+}

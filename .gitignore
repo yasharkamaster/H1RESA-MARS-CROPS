@@ -1,0 +1,10 @@
+**/__pycache__/
+**/*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.venv/
+venv/
+*.tmp
+submission/figures/_eq/
+images/
+images.zip
