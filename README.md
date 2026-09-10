@@ -73,25 +73,6 @@ Then open `HiRISE_Anomaly_Detection.ipynb` (loads the checkpoint; cells already 
 
 ---
 
-## Push to GitHub (important)
-
-1. Create a **private** repo.
-2. Add files and push (`images/`, `images.zip`, and `submission/figures/_eq/` are gitignored):
-
-```bash
-git add -A
-git status
-git commit -m "NSSC 2026 HiRISE anomaly detection submission"
-git branch -M main
-git remote add origin https://github.com/<USER>/<REPO>.git
-git push -u origin main
-```
-
-3. Add organisers as collaborators:  
-   `SarthakXSingh09`, `R15HV`, `Shivam3473`, `aditohates-bugs`, `Dhairya646`
-
-4. Submit the **GitHub link** on Unstop (latest entry counts). Enter your **Team ID** (`T-xxxxxxx`) on Unstop.
-
 ### Size notes
 
 | File | Approx size | Notes |
