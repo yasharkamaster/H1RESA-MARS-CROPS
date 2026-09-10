@@ -26,8 +26,12 @@ REPORT.pdf
 MODEL_CHANGELOG.md
 README.md
 requirements.txt
-crop_metadata_index.csv
-source_image_metadata.csv
+data/
+  crop_metadata_index.csv
+  source_image_metadata.csv
+  DA PS 26'.docx                 # problem statement
+  DATA_DESCRIPTION.docx
+  RULES AND REGULATIONS.docx
 # images/ + images.zip are local-only (.gitignore) — unzip locally to train
 src/
   model.py                       # ConvAE + MSE/SSIM/grad losses

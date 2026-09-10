@@ -26,8 +26,8 @@ from plots import make_figures
 
 ROOT = Path(__file__).resolve().parents[1]
 IMG_DIR = ROOT / "images" / "images"
-CROP_META = ROOT / "crop_metadata_index.csv"
-SRC_META = ROOT / "source_image_metadata.csv"
+CROP_META = ROOT / "data" / "crop_metadata_index.csv"
+SRC_META = ROOT / "data" / "source_image_metadata.csv"
 OUT = ROOT / "submission"
 FIG = OUT / "figures"
 CKPT = OUT / "checkpoints"
