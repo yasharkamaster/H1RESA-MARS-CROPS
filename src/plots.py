@@ -42,12 +42,16 @@ def make_figures(
     axes[1].plot(hist["epoch"], hist["loss"], "s-", color="#8B3A2F", ms=4, lw=1.5, zorder=3)
     ymax = float(hist["loss"].max())
     # Curriculum stages as shaded bands + legend (no rotated text on the curve)
+    emax = float(hist["epoch"].max()) + 0.5
+    # Detect late continue-train (v4) vs in-run fine-tune (v3)
     stages = [
         (0.5, 3.5, "#d9e6f2", "MSE warmup"),
         (3.5, 8.5, "#f3e4d8", "add SSIM+grad"),
         (8.5, 16.5, "#e8d9e6", "raise SSIM/grad"),
-        (16.5, float(hist["epoch"].max()) + 0.5, "#dde8dd", "fine-tune edges"),
+        (16.5, min(21.5, emax), "#dde8dd", "fine-tune edges"),
     ]
+    if emax > 22:
+        stages.append((21.5, emax, "#d6e8f5", "v4 continue-train"))
     for x0, x1, color, lab in stages:
         axes[1].axvspan(x0, x1, color=color, alpha=0.55, zorder=0, label=lab)
     for x in (3.5, 8.5, 16.5):
@@ -58,7 +62,7 @@ def make_figures(
     axes[1].set_title("Composite loss (shaded = curriculum stage)")
     axes[1].legend(loc="lower right", fontsize=7, frameon=True, fancybox=False, edgecolor="0.7")
     axes[1].grid(True, alpha=0.3, zorder=2)
-    fig.suptitle("Autoencoder training (v3)", y=1.02, fontsize=11)
+    fig.suptitle("Autoencoder training (v4)", y=1.02, fontsize=11)
     fig.tight_layout()
     fig.savefig(fig_dir / "01_training_curve.png", dpi=170, bbox_inches="tight")
     plt.close(fig)

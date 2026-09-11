@@ -1,6 +1,6 @@
 # NSSC 2026 — HiRISE unsupervised anomaly detection
 
-IIT Kharagpur · Data Analytics (Unstop online round).
+IIT Kharagpur · Data Analytics 
 
 Conv autoencoder (from scratch) → Isolation Forest on latents → MAD threshold → reconstruction heatmaps + metadata join.
 
@@ -40,7 +40,7 @@ src/
   plots.py                       # figure export
   train_and_analyze.py           # train / score / save outputs
 submission/
-  checkpoints/cae_v3.pt          # trained weights (float16)
+  checkpoints/cae_v4.pt          # trained weights (float16; cae_v3.pt mirrored)
   figures/                       # all report figures
   outputs/                       # scored CSV, threshold JSON, latents
 ```
@@ -49,12 +49,13 @@ Problem-statement PDFs/DOCX from the organisers can sit in the repo root if you 
 
 ---
 
-## Results (v3)
+## Results (v4)
 
 - Latent dim **512**
-- Loss **0.40·MSE + 0.35·(1−SSIM) + 0.25·∇L1**
-- Novelty **−IF.score_samples** (higher = more anomalous)
-- Threshold / flagged count: see `submission/outputs/threshold_meta.json`
+- Loss **0.40·MSE + 0.35·(1−SSIM) + 0.25·∇L1** (v4 continue-train from v3)
+- Novelty **−IF.score_samples** (higher = more anomalous); IF **600** trees
+- Threshold / flagged: see `submission/outputs/threshold_meta.json` (**MAD**, currently **161 / 10422**)
+- Optional: recon hybrid + metadata fusion (comparative)
 
 ---
 
@@ -63,13 +64,17 @@ Problem-statement PDFs/DOCX from the organisers can sit in the repo root if you 
 ```bash
 pip install -r requirements.txt
 # unzip competition crops locally (not in git): images/images/*.jpg
-# optional full retrain
-python src/train_and_analyze.py --epochs 16 --batch-size 24 --latent-dim 512
-# or reuse checkpoint
+# full train
+python src/train_and_analyze.py --epochs 21 --batch-size 24 --latent-dim 512
+# or continue-train from checkpoint (v4 path)
+python src/train_and_analyze.py --finetune --epochs 8 --batch-size 24 --lr 5e-5
+# or reuse checkpoint only
 python src/train_and_analyze.py --skip-train
 ```
 
 Then open `HiRISE_Anomaly_Detection.ipynb` (loads the checkpoint; cells already have outputs).
+
+Checkpoint: `submission/checkpoints/cae_v4.pt` (also mirrored as `cae_v3.pt` for older notebook cells).
 
 ---
 

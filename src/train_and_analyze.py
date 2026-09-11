@@ -1,7 +1,8 @@
 """
 Train the ConvAE, extract latents, score anomalies, write figures/CSVs.
 
-  python src/train_and_analyze.py --epochs 16 --batch-size 24 --latent-dim 512
+  python src/train_and_analyze.py --epochs 21 --batch-size 24 --latent-dim 512
+  python src/train_and_analyze.py --finetune --epochs 8 --lr 5e-5
   python src/train_and_analyze.py --skip-train
 """
 
@@ -19,7 +20,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from anomaly import metadata_fusion, novelty_pipeline
+from anomaly import apply_threshold, metadata_fusion, novelty_pipeline, recon_hybrid_scores
 from dataset import HiRISEDataset
 from model import ConvAutoencoder, combined_loss
 from plots import make_figures
@@ -32,6 +33,8 @@ OUT = ROOT / "submission"
 FIG = OUT / "figures"
 CKPT = OUT / "checkpoints"
 RES = OUT / "outputs"
+CKPT_NAME = "cae_v4.pt"
+CKPT_FALLBACK = "cae_v3.pt"
 
 
 def set_seed(seed: int = 42):
@@ -41,31 +44,72 @@ def set_seed(seed: int = 42):
     torch.cuda.manual_seed_all(seed)
 
 
+def loss_weights(epoch: int, total_epochs: int) -> tuple[float, float, float]:
+    """Curriculum matching the documented v3/v4 schedule."""
+    if epoch <= 3:
+        return 1.0, 0.0, 0.0
+    if epoch <= 8:
+        return 0.7, 0.2, 0.1
+    # last 5 epochs (or remaining) = edge fine-tune
+    if epoch > max(8, total_epochs - 5):
+        return 0.40, 0.35, 0.25
+    return 0.55, 0.30, 0.15
+
+
+def _save_checkpoint(model, latent_dim, history, path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sd = {
+        k: (v.half() if v.is_floating_point() else v).cpu()
+        for k, v in model.state_dict().items()
+    }
+    torch.save(
+        {
+            "model_state": sd,
+            "latent_dim": latent_dim,
+            "history": history,
+            "dtype": "float16",
+            "alpha": 0.40,
+            "beta": 0.35,
+            "gamma": 0.25,
+            "version": "v4",
+        },
+        path,
+    )
+
+
 def train_autoencoder(
     latent_dim: int = 512,
-    epochs: int = 18,
-    batch_size: int = 32,
+    epochs: int = 21,
+    batch_size: int = 24,
     lr: float = 2e-4,
     device: str = "cuda",
+    model: ConvAutoencoder | None = None,
+    start_epoch: int = 1,
+    finetune_only: bool = False,
+    history_prev: list | None = None,
 ):
     ds = HiRISEDataset(IMG_DIR, CROP_META, preload=True)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
-    model = ConvAutoencoder(latent_dim=latent_dim).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    if model is None:
+        model = ConvAutoencoder(latent_dim=latent_dim).to(device)
+    else:
+        model = model.to(device)
+        latent_dim = model.latent_dim
 
-    history = []
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    end_epoch = start_epoch + epochs - 1
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1))
+
+    history = list(history_prev or [])
     model.train()
-    for epoch in range(1, epochs + 1):
-        if epoch <= 3:
-            alpha, beta, gamma = 1.0, 0.0, 0.0
-        elif epoch <= 8:
-            alpha, beta, gamma = 0.7, 0.2, 0.1
+    for epoch in range(start_epoch, end_epoch + 1):
+        if finetune_only:
+            alpha, beta, gamma = 0.40, 0.35, 0.25
         else:
-            alpha, beta, gamma = 0.55, 0.30, 0.15
+            alpha, beta, gamma = loss_weights(epoch, end_epoch)
 
         losses, mses = [], []
-        pbar = tqdm(loader, desc=f"Epoch {epoch}/{epochs}")
+        pbar = tqdm(loader, desc=f"Epoch {epoch}/{end_epoch}")
         for x, _, _ in pbar:
             x = x.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
@@ -89,32 +133,21 @@ def train_autoencoder(
                 "gamma": gamma,
             }
         )
-        print(f"Epoch {epoch}: loss={history[-1]['loss']:.6f} mse={history[-1]['mse']:.6f}")
+        print(
+            f"Epoch {epoch}: loss={history[-1]['loss']:.6f} "
+            f"mse={history[-1]['mse']:.6f} "
+            f"w=({alpha:.2f},{beta:.2f},{gamma:.2f})"
+        )
 
-    CKPT.mkdir(parents=True, exist_ok=True)
-    # float16 weights keep the file under GitHub's 100 MB limit
-    sd = {
-        k: (v.half() if v.is_floating_point() else v).cpu()
-        for k, v in model.state_dict().items()
-    }
-    torch.save(
-        {
-            "model_state": sd,
-            "latent_dim": latent_dim,
-            "history": history,
-            "dtype": "float16",
-            "alpha": 0.40,
-            "beta": 0.35,
-            "gamma": 0.25,
-        },
-        CKPT / "cae_v3.pt",
-    )
+    _save_checkpoint(model, latent_dim, history, CKPT / CKPT_NAME)
+    # keep a copy at the name the notebook already knows
+    _save_checkpoint(model, latent_dim, history, CKPT / CKPT_FALLBACK)
     RES.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(history).to_csv(RES / "train_history.csv", index=False)
     return model, history
 
 
-def load_checkpoint(path: Path, device: str) -> ConvAutoencoder:
+def load_checkpoint(path: Path, device: str) -> tuple[ConvAutoencoder, dict]:
     ckpt = torch.load(path, map_location=device, weights_only=False)
     model = ConvAutoencoder(latent_dim=ckpt["latent_dim"]).to(device)
     sd = ckpt["model_state"]
@@ -122,7 +155,7 @@ def load_checkpoint(path: Path, device: str) -> ConvAutoencoder:
         sd = {k: v.float() if v.is_floating_point() else v for k, v in sd.items()}
     model.load_state_dict(sd)
     model.eval()
-    return model
+    return model, ckpt
 
 
 @torch.no_grad()
@@ -144,11 +177,16 @@ def extract_latents(model, device, batch_size=128):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epochs", type=int, default=18)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=21)
+    parser.add_argument("--batch-size", type=int, default=24)
     parser.add_argument("--latent-dim", type=int, default=512)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--skip-train", action="store_true")
+    parser.add_argument(
+        "--finetune",
+        action="store_true",
+        help="Continue from cae_v3/v4 with edge-heavy loss (0.40/0.35/0.25)",
+    )
     args = parser.parse_args()
 
     set_seed(42)
@@ -158,8 +196,29 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", device)
 
-    if args.skip_train and (CKPT / "cae_v3.pt").exists():
-        model = load_checkpoint(CKPT / "cae_v3.pt", device)
+    prefer = CKPT / CKPT_NAME if (CKPT / CKPT_NAME).exists() else CKPT / CKPT_FALLBACK
+
+    if args.skip_train and prefer.exists():
+        model, _ = load_checkpoint(prefer, device)
+    elif args.finetune:
+        src_ckpt = CKPT / CKPT_FALLBACK if (CKPT / CKPT_FALLBACK).exists() else prefer
+        if not src_ckpt.exists():
+            raise FileNotFoundError(f"No checkpoint to fine-tune at {src_ckpt}")
+        model, ckpt = load_checkpoint(src_ckpt, device)
+        hist_prev = ckpt.get("history") or []
+        start = int(hist_prev[-1]["epoch"]) + 1 if hist_prev else 22
+        print(f"Fine-tuning from {src_ckpt.name} starting epoch {start}")
+        model, _ = train_autoencoder(
+            latent_dim=args.latent_dim,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            device=device,
+            model=model,
+            start_epoch=start,
+            finetune_only=True,
+            history_prev=hist_prev,
+        )
     else:
         model, _ = train_autoencoder(
             latent_dim=args.latent_dim,
@@ -173,8 +232,21 @@ def main():
     np.save(RES / "latents.npy", Z)
 
     df, meta, _, _ = novelty_pipeline(Z, names, srcs, recon_errs)
-    fused_df, _ = metadata_fusion(Z, df, SRC_META)
 
+    # Optional recon fusion (comparative + can become primary if MAD band OK)
+    hybrid = recon_hybrid_scores(df["novelty_score"].values, df["recon_mse"].values)
+    df["novelty_score_hybrid"] = hybrid
+    df_h, meta_h = apply_threshold(df.copy(), score_col="novelty_score_hybrid")
+    meta["hybrid_threshold"] = meta_h["final_threshold"]
+    meta["hybrid_threshold_rule"] = meta_h["threshold_rule"]
+    meta["n_flagged_hybrid"] = meta_h["n_flagged"]
+    meta["flag_overlap_if_vs_hybrid"] = int(
+        ((df["is_anomaly"]) & (df_h["is_anomaly"])).sum()
+    )
+    # Keep IF+MAD as official primary; record hybrid for the report
+    df["is_anomaly_hybrid"] = df_h["is_anomaly"]
+
+    fused_df, _ = metadata_fusion(Z, df, SRC_META)
     nov_f = fused_df["novelty_score_fused"].values
     thr_f = float(nov_f.mean() + 2.5 * nov_f.std())
     fused_df["is_anomaly_fused"] = nov_f >= thr_f
@@ -183,6 +255,7 @@ def main():
     meta["flag_overlap_image_vs_fused"] = int(
         ((fused_df["is_anomaly"]) & (fused_df["is_anomaly_fused"])).sum()
     )
+    meta["model_version"] = "v4"
 
     src = pd.read_csv(SRC_META)
     out_df = fused_df.merge(src, on="source_image_id", how="left", suffixes=("", "_dup"))
@@ -191,11 +264,26 @@ def main():
     (RES / "threshold_meta.json").write_text(json.dumps(meta, indent=2))
 
     top = make_figures(
-        model, df, meta, Z, device,
-        img_dir=IMG_DIR, crop_meta=CROP_META, src_meta=SRC_META,
-        fig_dir=FIG, res_dir=RES,
+        model,
+        df,
+        meta,
+        Z,
+        device,
+        img_dir=IMG_DIR,
+        crop_meta=CROP_META,
+        src_meta=SRC_META,
+        fig_dir=FIG,
+        res_dir=RES,
     )
-    print("Flagged:", meta["n_flagged"], "threshold:", meta["final_threshold"], "rule:", meta["threshold_rule"])
+    print(
+        "Flagged:",
+        meta["n_flagged"],
+        "threshold:",
+        meta["final_threshold"],
+        "rule:",
+        meta["threshold_rule"],
+    )
+    print("Hybrid flagged:", meta["n_flagged_hybrid"], "overlap:", meta["flag_overlap_if_vs_hybrid"])
     print(top[["filename", "novelty_score", "source_image_id", "recon_mse"]])
     print("Done.", OUT)
 
